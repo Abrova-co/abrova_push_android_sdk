@@ -1,0 +1,5 @@
+# Copy this file to local.properties and fill in your values.
+# local.properties is gitignored — never commit it.
+
+# Your Abrova Push API key from https://console.abrova.ir
+ABROVA_PUSH_API_KEY=ab_live_your_key_here

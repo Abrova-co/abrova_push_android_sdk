@@ -1,0 +1,76 @@
+package ir.abrova.push.sdk
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+
+/**
+ * Receiver to restart AbrovaPush service after device boot or app update.
+ * Restores configuration from SharedPreferences and restarts the push connection.
+ */
+class BootReceiver : BroadcastReceiver() {
+    companion object {
+        private const val TAG = "AbrovaPushBootReceiver"
+        private const val PREFS_NAME = "abrova_push_prefs"
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            "android.intent.action.QUICKBOOT_POWERON" -> {
+                Log.d(TAG, "Device booted or app updated - attempting to restart AbrovaPush service")
+                restartService(context)
+            }
+        }
+    }
+
+    private fun restartService(context: Context) {
+        // Load persisted config
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val apiKey = prefs.getString("apiKey", null)
+        val deviceId = prefs.getString("device_id", null)
+
+        if (apiKey != null && deviceId != null) {
+            // Restore config from SharedPreferences
+            val config = AbrovaPushConfig(
+                apiKey = apiKey,
+                notificationIcon = prefs.getString("notificationIcon", null),
+                showServiceNotification = prefs.getBoolean("showServiceNotification", true),
+                wrapperSdkName = prefs.getString("wrapperSdkName", null),
+                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null),
+                sendDiagnostics = prefs.getBoolean("sendDiagnostics", true)
+            )
+            // Restore internal PN host and JWT token if available
+            val pnHost = prefs.getString("pnHost", "") ?: ""
+            if (pnHost.isNotEmpty()) {
+                val pnToken = prefs.getString("pnToken", null)
+                config.updatePushConfig(pnHost, token = pnToken)
+            }
+
+            AbrovaPushService.config = config
+            AbrovaPushService.deviceId = deviceId
+            // Use saved appId from server (projectId-based), fallback to apiKey prefix for legacy
+            val savedAppId = prefs.getString("appId", null)
+            AbrovaPushService.appId = savedAppId ?: apiKey.take(16)
+            // Restore appIdentifier (packageName) for correct pn-protocol topic subscription
+            val savedAppIdentifier = prefs.getString("appIdentifier", null)
+            AbrovaPushService.appIdentifier = savedAppIdentifier ?: context.packageName
+
+            val serviceIntent = Intent(context, AbrovaPushService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+                Log.d(TAG, "AbrovaPush service restarted successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restart AbrovaPush service: ${e.message}")
+            }
+        } else {
+            Log.d(TAG, "AbrovaPush not configured - service not started")
+        }
+    }
+}

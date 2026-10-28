@@ -1,0 +1,32 @@
+pluginManagement {
+    plugins {
+        id 'com.android.application' version '8.9.1'
+        id 'org.jetbrains.kotlin.android' version '2.1.0'
+    }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://center.abrova.ir/api/packages/abrova/maven" }
+        // Local libs folder for fallback
+        flatDir {
+            dirs("../libs")
+        }
+    }
+}
+
+rootProject.name = "AbrovaPushExample"
+
+// SDK modules (pn-protocol is pulled from Abrova Center automatically)
+include ':abrova-push'
+project(':abrova-push').projectDir = new File('../abrova-push')
+include ':abrova-push-voip'
+project(':abrova-push-voip').projectDir = new File('../abrova-push-voip')

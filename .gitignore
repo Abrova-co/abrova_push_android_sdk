@@ -1,0 +1,44 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive files
+*.jks
+*.keystore
+google-services.json
+*.env
+*.env.*
+
+# Build outputs
+*.apk
+*.aab
+mapping.txt
+outputs/
+
+# Claude
+.claude/
+
+# Local Gradle user home under example/
+example/.tmp/
+example/caches/
+example/daemon/
+example/native/
+example/wrapper/
+example/notifications/
+
+# Local credential backups — NEVER commit (public repo)
+.secrets-backup/
+**/.gnupg/
+*.asc
+*.gpg
+*.key
+gradle.properties.backup

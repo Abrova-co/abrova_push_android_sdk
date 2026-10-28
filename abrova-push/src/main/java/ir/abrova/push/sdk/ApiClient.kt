@@ -1,0 +1,749 @@
+package ir.abrova.push.sdk
+
+import android.os.Handler
+import android.os.Looper
+import com.google.gson.Gson
+import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import ir.abrova.push.sdk.internal.SdkDiagnostics
+import ir.abrova.push.sdk.internal.SdkIdentity
+import ir.abrova.push.sdk.internal.UserTokenInterceptor
+import org.json.JSONObject
+import java.io.IOException
+
+/**
+ * API client for communicating with Abrova Push backend server.
+ * Includes automatic retry logic with exponential backoff.
+ */
+class ApiClient(private val config: AbrovaPushConfig) {
+    companion object {
+        private const val TAG = "Api"
+    }
+
+    private val sdkIdentity = SdkIdentity.from(config)
+
+    // Use secure client with retry interceptor; every request carries X-Abrova-SDK
+    // and, when a signed user token is available, x-user-token.
+    private val client = NetworkConfig.createSecureClient().newBuilder()
+        .addInterceptor(sdkIdentity.interceptor())
+        .addInterceptor(UserTokenInterceptor())
+        .addInterceptor(SdkDiagnostics.interceptor())
+        .build()
+    private val gson = Gson()
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    data class RegisterRequest(
+        val deviceId: String,
+        val platform: String = "android",
+        val userId: String? = null,
+        val metadata: Map<String, Any>? = null,
+        val appIdentifier: String? = null,
+        // Auto-captured device attributes — sent as top-level fields so the
+        // dashboard's segment builder can filter on them as preset fields.
+        // Nullable for backward compat with older SDK / server pairings.
+        val appVersion: String? = null,
+        val appBuild: Long? = null,
+        val osVersion: String? = null,
+        val deviceModel: String? = null,
+        val language: String? = null,
+        val country: String? = null,
+        val timezone: String? = null,
+        // SDK identity ("android" or an official wrapper such as "flutter").
+        val sdkName: String? = null,
+        val sdkVersion: String? = null,
+        // Stable per-install fingerprint (see InstallId) so the server can retire
+        // the previous row for the same physical device. Omitted when unavailable.
+        val installId: String? = null
+    )
+
+    data class PNConnectionConfig(
+        val host: String,
+        val wsHost: String? = null,
+        val port: Int = 8883,
+        val wsPort: Int = 443,
+        val token: String? = null, // JWT token for PN Protocol authentication
+        val secure: Boolean = true // Enable TLS/SSL for secure connection
+    )
+
+    data class RegisterResponse(
+        val deviceId: String,
+        val subscriptionId: String? = null, // Backend-issued per-install UUID, addressing key for new SDK builds
+        val appId: String? = null, // App ID from server (first 16 chars of projectId)
+        val appIdentifier: String? = null, // App identifier for per-app message routing
+        val message: String? = null,
+        val mqtt: PNConnectionConfig? = null, // Server returns 'mqtt' key (legacy name), mapped to PNConnectionConfig
+        // Optional extra endpoints for failover: [{ host, port, tls }]. Validated by MqttEndpoints.parse().
+        val mqttEndpoints: com.google.gson.JsonElement? = null
+    )
+
+    interface ApiCallback<T> {
+        fun onSuccess(response: T)
+        fun onError(error: String)
+    }
+
+    /**
+     * Register device with the server.
+     */
+    fun registerDevice(
+        deviceId: String,
+        userId: String? = null,
+        metadata: Map<String, Any>? = null,
+        appIdentifier: String? = null,
+        appVersion: String? = null,
+        appBuild: Long? = null,
+        osVersion: String? = null,
+        deviceModel: String? = null,
+        language: String? = null,
+        country: String? = null,
+        timezone: String? = null,
+        installId: String? = null,
+        extraFields: Map<String, Any?>? = null,
+        callback: ApiCallback<RegisterResponse>
+    ) {
+        val request = RegisterRequest(
+            deviceId = deviceId,
+            userId = userId,
+            metadata = metadata,
+            appIdentifier = appIdentifier,
+            appVersion = appVersion,
+            appBuild = appBuild,
+            osVersion = osVersion,
+            deviceModel = deviceModel,
+            language = language,
+            country = country,
+            timezone = timezone,
+            sdkName = sdkIdentity.name,
+            sdkVersion = sdkIdentity.version,
+            installId = installId
+        )
+
+        val body = buildRegisterBody(request, extraFields).toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/devices/register")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        Log.d(TAG, "Registering device: $deviceId")
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Registration failed: ${e.message}")
+                mainHandler.post {
+                    callback.onError(e.message ?: "Network error")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                // Read response data before closing - must be done on callback thread
+                val isSuccessful = response.isSuccessful
+                val code = response.code
+                val responseBody = response.body?.string() ?: ""
+                response.close()
+
+                mainHandler.post {
+                    if (isSuccessful) {
+                        Log.d(TAG, "Device registered successfully: $responseBody")
+                        try {
+                            val jsonResponse = gson.fromJson(responseBody, RegisterResponse::class.java)
+                            callback.onSuccess(jsonResponse ?: RegisterResponse(deviceId))
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse registration response: ${e.message}")
+                            callback.onSuccess(RegisterResponse(deviceId))
+                        }
+                    } else {
+                        Log.e(TAG, "Registration failed: $code - $responseBody")
+                        callback.onError("Registration failed: $code")
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * Register request JSON plus fields contributed by add-on transports
+     * (e.g. fcmToken). Without extra fields the body is exactly as before.
+     * An extra field mapped to null is sent as JSON null so the server clears it.
+     */
+    internal fun buildRegisterBody(request: RegisterRequest, extraFields: Map<String, Any?>?): String {
+        if (extraFields.isNullOrEmpty()) return gson.toJson(request)
+        val tree = gson.toJsonTree(request).asJsonObject
+        for ((key, value) in extraFields) {
+            tree.add(key, if (value == null) com.google.gson.JsonNull.INSTANCE else gson.toJsonTree(value))
+        }
+        return com.google.gson.GsonBuilder().serializeNulls().create().toJson(tree)
+    }
+
+    /**
+     * `/devices/{deviceId}/topics/{topic}` with both ids percent-encoded as
+     * single path segments, so a topic containing spaces, `/`, `?` or `#`
+     * reaches the server unchanged instead of altering the path.
+     */
+    internal fun topicUrl(deviceId: String, topic: String): HttpUrl =
+        AbrovaPushConfig.SERVER_URL.toHttpUrl().newBuilder()
+            .addPathSegment("devices")
+            .addPathSegment(deviceId)
+            .addPathSegment("topics")
+            .addPathSegment(topic)
+            .build()
+
+    /**
+     * Subscribe to a topic.
+     */
+    fun subscribeTopic(deviceId: String, topic: String, callback: ApiCallback<String>) {
+        val httpRequest = Request.Builder()
+            .url(topicUrl(deviceId, topic))
+            .addHeader("x-api-key", config.apiKey)
+            .post("".toRequestBody(null))
+            .build()
+
+        Log.d(TAG, "Subscribing to topic: $topic")
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Topic subscription failed: ${e.message}")
+                mainHandler.post {
+                    callback.onError(e.message ?: "Network error")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val isSuccessful = response.isSuccessful
+                val code = response.code
+                val responseBody = response.body?.string() ?: ""
+                response.close()
+
+                mainHandler.post {
+                    if (isSuccessful) {
+                        Log.d(TAG, "Subscribed to topic '$topic' successfully")
+                        callback.onSuccess(responseBody)
+                    } else {
+                        Log.e(TAG, "Topic subscription failed: $code")
+                        callback.onError("Topic subscription failed: $code")
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * Unsubscribe from a topic.
+     */
+    fun unsubscribeTopic(deviceId: String, topic: String, callback: ApiCallback<String>) {
+        val httpRequest = Request.Builder()
+            .url(topicUrl(deviceId, topic))
+            .addHeader("x-api-key", config.apiKey)
+            .delete()
+            .build()
+
+        Log.d(TAG, "Unsubscribing from topic: $topic")
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Topic unsubscription failed: ${e.message}")
+                mainHandler.post {
+                    callback.onError(e.message ?: "Network error")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val isSuccessful = response.isSuccessful
+                val code = response.code
+                val responseBody = response.body?.string() ?: ""
+                response.close()
+
+                mainHandler.post {
+                    if (isSuccessful) {
+                        Log.d(TAG, "Unsubscribed from topic '$topic' successfully")
+                        callback.onSuccess(responseBody)
+                    } else {
+                        Log.e(TAG, "Topic unsubscription failed: $code")
+                        callback.onError("Topic unsubscription failed: $code")
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * Set user ID for a device.
+     */
+    fun setUserId(deviceId: String, userId: String, callback: ApiCallback<String>) {
+        val body = gson.toJson(mapOf("userId" to userId)).toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/devices/$deviceId/user")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        Log.d(TAG, "Setting user ID: $userId for device: $deviceId")
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Set user ID failed: ${e.message}")
+                mainHandler.post {
+                    callback.onError(e.message ?: "Network error")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val isSuccessful = response.isSuccessful
+                val code = response.code
+                val responseBody = response.body?.string() ?: ""
+                response.close()
+
+                mainHandler.post {
+                    if (isSuccessful) {
+                        Log.d(TAG, "User ID set successfully")
+                        callback.onSuccess(responseBody)
+                    } else {
+                        Log.e(TAG, "Set user ID failed: $code")
+                        callback.onError("Set user ID failed: $code")
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * Clear user ID for a device.
+     */
+    fun clearUserId(deviceId: String, callback: ApiCallback<String>) {
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/devices/$deviceId/user")
+            .addHeader("x-api-key", config.apiKey)
+            .delete()
+            .build()
+
+        Log.d(TAG, "Clearing user ID for device: $deviceId")
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Clear user ID failed: ${e.message}")
+                mainHandler.post {
+                    callback.onError(e.message ?: "Network error")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val isSuccessful = response.isSuccessful
+                val code = response.code
+                val responseBody = response.body?.string() ?: ""
+                response.close()
+
+                mainHandler.post {
+                    if (isSuccessful) {
+                        Log.d(TAG, "User ID cleared successfully")
+                        callback.onSuccess(responseBody)
+                    } else {
+                        Log.e(TAG, "Clear user ID failed: $code")
+                        callback.onError("Clear user ID failed: $code")
+                    }
+                }
+            }
+        })
+    }
+
+    // ==================== Push Server Configuration ====================
+
+    data class PushConfig(
+        val host: String,
+        val port: Int = 1883,
+        val username: String? = null,
+        val password: String? = null
+    )
+
+    // Internal response mapping - server returns "mqtt" field
+    private data class PushConfigResponse(
+        val mqtt: PushConfig
+    )
+
+    /**
+     * Fetch push server configuration from server (synchronous - call from background thread).
+     */
+    fun fetchPushConfig(): PushConfig? {
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/devices/config")
+            .addHeader("x-api-key", config.apiKey)
+            .get()
+            .build()
+
+        Log.d(TAG, "Fetching push config from server")
+
+        return try {
+            val response = client.newCall(httpRequest).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    val responseBody = it.body?.string()
+                    if (responseBody != null) {
+                        val configResponse = gson.fromJson(responseBody, PushConfigResponse::class.java)
+                        Log.d(TAG, "Fetched push config: host=${configResponse.mqtt.host}, port=${configResponse.mqtt.port}, user=${configResponse.mqtt.username}")
+                        configResponse.mqtt
+                    } else {
+                        Log.e(TAG, "Empty response from config endpoint")
+                        null
+                    }
+                } else {
+                    Log.e(TAG, "Fetch push config failed: ${it.code}")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Fetch push config failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Fetch push server configuration from server (async).
+     */
+    fun fetchPushConfigAsync(callback: ApiCallback<PushConfig>) {
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/devices/config")
+            .addHeader("x-api-key", config.apiKey)
+            .get()
+            .build()
+
+        Log.d(TAG, "Fetching push config from server (async)")
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "Fetch push config failed: ${e.message}")
+                mainHandler.post {
+                    callback.onError(e.message ?: "Network error")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                // Read response body before closing - must be done on callback thread
+                val isSuccessful = response.isSuccessful
+                val code = response.code
+                val responseBody = response.body?.string()
+                response.close()
+
+                mainHandler.post {
+                    if (isSuccessful) {
+                        if (responseBody != null) {
+                            try {
+                                val configResponse = gson.fromJson(responseBody, PushConfigResponse::class.java)
+                                Log.d(TAG, "Fetched push config: host=${configResponse.mqtt.host}, port=${configResponse.mqtt.port}, user=${configResponse.mqtt.username}")
+                                callback.onSuccess(configResponse.mqtt)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Parse push config failed: ${e.message}")
+                                callback.onError("Failed to parse push config")
+                            }
+                        } else {
+                            callback.onError("Empty response from server")
+                        }
+                    } else {
+                        Log.e(TAG, "Fetch push config failed: $code")
+                        callback.onError("Failed to fetch push config: $code")
+                    }
+                }
+            }
+        })
+    }
+
+    // ==================== In-App Messages ====================
+
+    /**
+     * Fetch in-app messages for a device (synchronous - call from background thread).
+     * Uses POST /in-app/fetch endpoint with body params.
+     */
+    fun getInAppMessages(params: Map<String, Any?>): String? {
+        val body = gson.toJson(params).toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/in-app/fetch")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        Log.d(TAG, "Fetching in-app messages for device: ${params["deviceId"]}")
+
+        return try {
+            val response = client.newCall(httpRequest).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    val responseBody = it.body?.string()
+                    Log.d(TAG, "Fetched in-app messages successfully")
+                    responseBody
+                } else {
+                    Log.e(TAG, "Fetch in-app messages failed: ${it.code}")
+                    null
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Fetch in-app messages failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Record an in-app message impression (synchronous - call from background thread).
+     * Uses POST /in-app/impression endpoint.
+     */
+    fun recordInAppImpression(params: Map<String, String>): Boolean {
+        val body = gson.toJson(params).toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/in-app/impression")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        Log.d(TAG, "Recording in-app impression: ${params["action"]} for message: ${params["messageId"]}")
+
+        return try {
+            val response = client.newCall(httpRequest).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    Log.d(TAG, "In-app impression recorded successfully")
+                    true
+                } else {
+                    Log.e(TAG, "Record impression failed: ${it.code}")
+                    false
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Record impression failed: ${e.message}")
+            false
+        }
+    }
+
+    // ==================== A/B Testing ====================
+
+    /**
+     * Get all active A/B tests for the app (synchronous - call from background thread).
+     * Uses GET /ab-tests/sdk/active endpoint.
+     */
+    fun getActiveABTests(): String? {
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/ab-tests/sdk/active")
+            .addHeader("x-api-key", config.apiKey)
+            .get()
+            .build()
+
+        Log.d(TAG, "Fetching active A/B tests")
+
+        return try {
+            val response = client.newCall(httpRequest).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    val responseBody = it.body?.string()
+                    Log.d(TAG, "Fetched active A/B tests successfully")
+                    responseBody
+                } else {
+                    Log.e(TAG, "Fetch active A/B tests failed: ${it.code}")
+                    null
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Fetch active A/B tests failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Get A/B test variant assignment for a device (synchronous - call from background thread).
+     * Uses POST /ab-tests/sdk/assignment endpoint.
+     */
+    fun getABTestAssignment(testId: String, deviceId: String): String? {
+        val params = mapOf("testId" to testId, "deviceId" to deviceId)
+        val body = gson.toJson(params).toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/ab-tests/sdk/assignment")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        Log.d(TAG, "Fetching A/B test assignment for test: $testId, device: $deviceId")
+
+        return try {
+            val response = client.newCall(httpRequest).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    val responseBody = it.body?.string()
+                    Log.d(TAG, "Fetched A/B test assignment successfully")
+                    responseBody
+                } else {
+                    Log.e(TAG, "Fetch A/B test assignment failed: ${it.code}")
+                    null
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Fetch A/B test assignment failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Track an A/B test event (synchronous - call from background thread).
+     * Uses POST /ab-tests/sdk/track/{event} endpoint.
+     */
+    fun trackABTestEvent(testId: String, variantId: String, deviceId: String, event: String): Boolean {
+        val params = mapOf("testId" to testId, "variantId" to variantId, "deviceId" to deviceId)
+        val body = gson.toJson(params).toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/ab-tests/sdk/track/$event")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        Log.d(TAG, "Tracking A/B test event: $event for test: $testId, variant: $variantId")
+
+        return try {
+            val response = client.newCall(httpRequest).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    Log.d(TAG, "A/B test event tracked successfully")
+                    true
+                } else {
+                    Log.e(TAG, "Track A/B test event failed: ${it.code}")
+                    false
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Track A/B test event failed: ${e.message}")
+            false
+        }
+    }
+
+    /** Outcome of a delivery ack attempt. */
+    internal enum class AckResult { SUCCESS, RETRYABLE, PERMANENT_FAILURE }
+
+    /**
+     * Confirm that a notification reached this device.
+     *
+     * PN Protocol, APNs and Web Push all report only that the transport
+     * accepted a notification — none of them confirm it arrived. This ack is
+     * the only signal that it actually did, letting the dashboard separate
+     * "accepted" from "delivered".
+     *
+     * Fire-and-forget: a failed ack costs a delivery statistic, never the
+     * notification itself.
+     */
+    fun reportDelivered(messageId: String, deviceId: String) {
+        client.newCall(buildDeliveredRequest(messageId, deviceId, null)).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.w(TAG, "Delivery ack failed: ${e.message}")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.close()
+            }
+        })
+    }
+
+    /**
+     * Synchronous delivery ack (call from a background thread). The server
+     * endpoint is idempotent, so retrying a [AckResult.RETRYABLE] result is safe.
+     */
+    internal fun reportDeliveredSync(
+        messageId: String,
+        deviceId: String,
+        transport: String? = null
+    ): AckResult {
+        return try {
+            client.newCall(buildDeliveredRequest(messageId, deviceId, transport)).execute().use {
+                when {
+                    it.isSuccessful -> AckResult.SUCCESS
+                    it.code == 408 || it.code == 429 || it.code >= 500 -> AckResult.RETRYABLE
+                    else -> {
+                        Log.w(TAG, "Delivery ack rejected: ${it.code}")
+                        AckResult.PERMANENT_FAILURE
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "Delivery ack failed: ${e.message}")
+            AckResult.RETRYABLE
+        }
+    }
+
+    /** [transport] is "pn" or "fcm"; omitted when null (older behaviour). */
+    private fun buildDeliveredRequest(messageId: String, deviceId: String, transport: String?): Request {
+        val payload = JSONObject().apply {
+            put("messageId", messageId)
+            put("deviceId", deviceId)
+            if (!transport.isNullOrEmpty()) put("transport", transport)
+        }
+        return Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/receipts/delivered")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+    }
+
+    /** A user interaction with a shown notification, reported to Abrova Push. */
+    internal enum class Interaction(val path: String) {
+        /** The user tapped the notification body. */
+        OPENED("opened"),
+        /** The user tapped an action button. */
+        CLICKED("clicked"),
+        /** The user swiped the notification away. */
+        DISMISSED("dismissed")
+    }
+
+    /**
+     * Report an interaction with a notification (call from a background
+     * thread). Same headers as the delivery ack; the server endpoints are
+     * idempotent, so retrying a [AckResult.RETRYABLE] result is safe.
+     * [actionId] is sent only for [Interaction.CLICKED].
+     */
+    internal fun reportInteractionSync(
+        interaction: Interaction,
+        messageId: String,
+        deviceId: String,
+        actionId: String? = null
+    ): AckResult {
+        return try {
+            client.newCall(buildInteractionRequest(interaction, messageId, deviceId, actionId)).execute().use {
+                when {
+                    it.isSuccessful -> AckResult.SUCCESS
+                    it.code == 408 || it.code == 429 || it.code >= 500 -> AckResult.RETRYABLE
+                    else -> {
+                        Log.w(TAG, "${interaction.path} receipt rejected: ${it.code}")
+                        AckResult.PERMANENT_FAILURE
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "${interaction.path} receipt failed: ${e.message}")
+            AckResult.RETRYABLE
+        }
+    }
+
+    internal fun buildInteractionRequest(
+        interaction: Interaction,
+        messageId: String,
+        deviceId: String,
+        actionId: String?
+    ): Request {
+        val payload = JSONObject().apply {
+            put("messageId", messageId)
+            put("deviceId", deviceId)
+            if (interaction == Interaction.CLICKED && !actionId.isNullOrEmpty()) put("actionId", actionId)
+        }
+        return Request.Builder()
+            .url("${AbrovaPushConfig.SERVER_URL}/receipts/${interaction.path}")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+    }
+}
