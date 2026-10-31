@@ -374,6 +374,10 @@ class AbrovaPushService : Service() {
             // copy is shown, broadcast and passed to the callback.
             if (!claimForDisplay(appContext, message.messageId)) {
                 Log.d(TAG, "Duplicate message ${message.messageId} via $transport - ignoring")
+                // The first copy may have been shown without its ack getting out (the
+                // process killed after an FCM wake, no network yet): the ack is what
+                // stops the backend resending, so a repeat sends it. A no-op once acked.
+                reportDelivered(appContext, message.messageId, transport)
                 return true
             }
 
