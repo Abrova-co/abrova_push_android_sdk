@@ -57,6 +57,8 @@ class BootReceiver : BroadcastReceiver() {
             // Restore appIdentifier (packageName) for correct pn-protocol topic subscription
             val savedAppIdentifier = prefs.getString("appIdentifier", null)
             AbrovaPushService.appIdentifier = savedAppIdentifier ?: context.packageName
+            // Restore subscriptionId for the subscription topic
+            AbrovaPushService.subscriptionId = prefs.getString("subscription_id", null)
 
             val serviceIntent = Intent(context, AbrovaPushService::class.java)
             try {
