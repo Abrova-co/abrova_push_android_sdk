@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-11-06
+
+### Added
+- Notification channels. Define channels in Abrova Console (each with its own importance, vibration and sound) and
+  send a message with `channelId`.
+  - The SDK creates the project's channels at registration, so they show in the app's notification settings before
+    the first message, and shows each message on its channel.
+  - A `channelId` that is not a Console channel is used as a channel your app created itself; if there is none, the
+    default channel is used.
+  - When a channel's importance, vibration or sound changes in the Console, the SDK replaces the channel.
+  - Before Android 8 the channel's sound and vibration apply to each notification.
+- `AbrovaPushMessage.channelId` and `AbrovaPushMessage.channel`.
+
 ## [0.1.20] - 2026-11-01
 
 ### Fixed

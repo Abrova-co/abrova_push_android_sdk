@@ -106,6 +106,14 @@ data class AbrovaPushMessage(
     @SerializedName("category")
     val category: String? = null,
 
+    /** Notification channel: a Console channel key, or an Android channel the app created itself. */
+    @SerializedName("channelId")
+    val channelId: String? = null,
+
+    /** The Console channel's definition, added by the server so the SDK can create the channel when needed. */
+    @SerializedName("channel")
+    val channel: AbrovaPushChannel? = null,
+
     @SerializedName("priority")
     val priority: String? = null,
 
@@ -174,6 +182,8 @@ data class AbrovaPushMessage(
                     threadId = map["threadId"] as? String,
                     collapseKey = map["collapseKey"] as? String,
                     category = map["category"] as? String,
+                    channelId = map["channelId"] as? String,
+                    channel = AbrovaPushChannel.fromMap(map["channel"] as? Map<String, Any?>),
                     priority = map["priority"] as? String,
                     ttl = (map["ttl"] as? Number)?.toInt(),
                     localizations = localizations,
@@ -205,6 +215,8 @@ data class AbrovaPushMessage(
             "threadId" to threadId,
             "collapseKey" to collapseKey,
             "category" to category,
+            "channelId" to channelId,
+            "channel" to channel?.toMap(),
             "priority" to priority,
             "ttl" to ttl,
             "localizations" to localizations?.map { it.toMap() },

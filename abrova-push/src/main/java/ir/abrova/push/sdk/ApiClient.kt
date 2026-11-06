@@ -76,7 +76,9 @@ class ApiClient(private val config: AbrovaPushConfig) {
         val message: String? = null,
         val mqtt: PNConnectionConfig? = null, // Server returns 'mqtt' key (legacy name), mapped to PNConnectionConfig
         // Optional extra endpoints for failover: [{ host, port, tls }]. Validated by MqttEndpoints.parse().
-        val mqttEndpoints: com.google.gson.JsonElement? = null
+        val mqttEndpoints: com.google.gson.JsonElement? = null,
+        // The project's notification channels (absent from older servers: nothing changes then).
+        val channels: List<AbrovaPushChannel>? = null
     )
 
     interface ApiCallback<T> {

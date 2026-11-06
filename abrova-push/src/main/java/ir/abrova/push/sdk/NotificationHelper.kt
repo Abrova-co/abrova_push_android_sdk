@@ -242,8 +242,10 @@ class NotificationHelper(
 
         val iconRes = getNotificationIcon()
 
-        // Use a custom notification channel if a custom sound is specified (Android 8+)
-        val channelId = getOrCreateSoundChannel(message.sound)
+        // The message's channel (a Console channel or the app's own), else a custom-sound channel, else the default.
+        val channelId = AbrovaPushChannels.channelFor(context, message) ?: getOrCreateSoundChannel(message.sound)
+        // Before Android 8 there are no channels: the Console channel's sound and vibration apply per notification.
+        val channelDef = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) AbrovaPushChannels.definitionFor(context, message) else null
 
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(iconRes)
@@ -330,7 +332,26 @@ class NotificationHelper(
             builder.addAction(actionIcon, action.title, actionPendingIntent)
         }
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && channelDef != null) {
+            if (message.priority == null) {
+                builder.setPriority(
+                    when (channelDef.importance) {
+                        "high" -> NotificationCompat.PRIORITY_HIGH
+                        "low" -> NotificationCompat.PRIORITY_LOW
+                        else -> NotificationCompat.PRIORITY_DEFAULT
+                    }
+                )
+            }
+            val sound = message.sound?.takeIf { it.isNotEmpty() } ?: channelDef.soundName
+            var defaults = 0
+            if (channelDef.vibrates) defaults = defaults or NotificationCompat.DEFAULT_VIBRATE else builder.setVibrate(longArrayOf(0))
+            when {
+                sound == "none" -> builder.setSilent(!channelDef.vibrates)
+                sound == "default" -> defaults = defaults or NotificationCompat.DEFAULT_SOUND
+                else -> AbrovaPushChannels.soundUri(context, sound)?.let { builder.setSound(it) }
+            }
+            builder.setDefaults(defaults)
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             if (message.sound.isNullOrEmpty() || message.sound == "default") {
                 builder.setDefaults(NotificationCompat.DEFAULT_SOUND)
             } else {

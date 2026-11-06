@@ -442,6 +442,9 @@ object AbrovaPush {
                 // Optional failover endpoints. Absent = default endpoint only (clears any old list).
                 saveMqttEndpoints(ctx, MqttEndpoints.parse(response.mqttEndpoints))
 
+                // Create the project's notification channels now, so they show in the phone's settings.
+                AbrovaPushChannels.sync(ctx, response.channels)
+
                 // Update InboxManager with userId if it exists
                 inboxManager?.setUserId(userId)
 
