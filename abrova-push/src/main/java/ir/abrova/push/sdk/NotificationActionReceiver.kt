@@ -188,6 +188,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
             val variantId = intent.getStringExtra(EXTRA_VARIANT_ID)
             val messageJson = intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_JSON)
             val notificationId = intent.getIntExtra(NotificationHelper.EXTRA_NOTIFICATION_ID, -1)
+            val notificationTag = intent.getStringExtra(NotificationHelper.EXTRA_NOTIFICATION_TAG)
 
             val isMainNotificationTap = actionId == "notification_tap"
 
@@ -318,7 +319,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
             // auto-cancelled via setAutoCancel(true).
             if (!isMainNotificationTap && notificationId != -1) {
                 try {
-                    NotificationManagerCompat.from(context).cancel(notificationId)
+                    NotificationManagerCompat.from(context).cancel(notificationTag, notificationId)
                     Log.d(TAG, "Dismissed notification id=$notificationId after action tap")
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to dismiss notification id=$notificationId: ${e.message}")

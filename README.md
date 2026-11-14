@@ -33,7 +33,7 @@ Then add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("ir.abrova:abrova-push-android:0.1.21")
+    implementation("ir.abrova:abrova-push-android:0.1.22")
 }
 ```
 
@@ -188,6 +188,23 @@ AbrovaPush.unsubscribeTopic("news")
 | `priority` | string | "high" or "normal" |
 | `ttl` | number | Time-to-live in seconds |
 
+## Conversation Notifications
+
+A message whose `data` has a `conversationId` is shown chat-style: the sender's round photo (or a letter), the
+conversation's messages stacked in one notification, and on Android 11+ the chat in the phone's Conversations section.
+Nothing to call in the app; messages without `conversationId` look as before. Abrova Chat sends these keys for you.
+
+| Key | |
+|---|---|
+| `conversationId` | Required. One conversation per id (your chat or room id). |
+| `senderName` | Who wrote the message (else the title). |
+| `senderId` | Tells two senders with the same name apart. |
+| `senderAvatarUrl` | An https image for the sender's photo. |
+| `conversationTitle` | The group's name (shown for groups). |
+| `conversationIsGroup` | `true` for a group. |
+
+Guide: https://abrova.ir/docs/push/conversation-notifications
+
 ## In-App Messages
 
 ```kotlin
@@ -278,7 +295,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Abrova-co/abrova_pus
 
 ```kotlin
 dependencies {
-    implementation("ir.abrova:abrova-push-android:0.1.21")
+    implementation("ir.abrova:abrova-push-android:0.1.22")
     implementation("ir.abrova:abrova-push-voip:0.1.1")  // Optional
 }
 ```

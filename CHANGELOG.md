@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-11-15
+
+### Added
+- Chat-style (conversation) notifications. A message whose `data` has a `conversationId` is shown with Android's
+  MessagingStyle: the sender's round photo (`senderAvatarUrl`, else a letter), the conversation's messages stacked in
+  one notification, the group name for groups, and on Android 11+ the chat in the phone's Conversations section.
+  Keys: `conversationId` (required), `senderName`, `senderId`, `senderAvatarUrl`, `conversationTitle`, `conversationIsGroup`. Messages without `conversationId` look as before.
+
 ## [0.1.21] - 2026-11-06
 
 ### Added

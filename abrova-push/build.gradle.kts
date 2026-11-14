@@ -9,7 +9,7 @@ plugins {
 // Increment MINOR for new features
 // Increment PATCH for bug fixes
 // Increment BUILD for iterations/testing during development
-val sdkVersion = "0.1.21"
+val sdkVersion = "0.1.22"
 
 android {
     namespace = "ir.abrova.push.sdk"

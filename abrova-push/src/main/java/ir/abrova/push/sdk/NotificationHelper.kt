@@ -45,6 +45,8 @@ class NotificationHelper(
         const val EXTRA_ABROVA_NOTIFICATION_TAP = "abrova_notification_tap"
         const val EXTRA_MESSAGE_JSON = "abrova_message_json"
         const val EXTRA_NOTIFICATION_ID = "abrova_notification_id"
+        /** Set for a conversation notification (shown with a tag). */
+        const val EXTRA_NOTIFICATION_TAG = "abrova_notification_tag"
 
         /**
          * Get the message that launched the app (when user tapped a notification)
@@ -186,6 +188,23 @@ class NotificationHelper(
         val title = message.getLocalizedTitle(deviceLocale)
         val body = message.getLocalizedBody(deviceLocale)
 
+        // A chat message (data.conversationId): the sender's photo instead of the big picture.
+        val conversation = ConversationInfo.from(message.data, title)
+        if (conversation != null) {
+            val avatarUrl = conversation.senderAvatarUrl
+            if (avatarUrl != null) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    val avatar = downloadImage(avatarUrl)
+                    withContext(Dispatchers.Main) {
+                        showNotificationWithBitmap(message, title, body, null, conversation, avatar)
+                    }
+                }
+            } else {
+                showNotificationWithBitmap(message, title, body, null, conversation, null)
+            }
+            return
+        }
+
         // Check if we need to download an image
         if (message.imageUrl != null) {
             CoroutineScope(Dispatchers.IO).launch {
@@ -203,9 +222,14 @@ class NotificationHelper(
         message: AbrovaPushMessage,
         title: String,
         body: String,
-        imageBitmap: Bitmap?
+        imageBitmap: Bitmap?,
+        conversation: ConversationInfo? = null,
+        avatar: Bitmap? = null,
     ) {
         val currentNotificationId = notificationId.getAndIncrement()
+        // A conversation keeps one notification (tag + fixed id) that each new message updates.
+        val shownTag = conversation?.tag
+        val shownId = if (conversation != null) ConversationNotification.NOTIFICATION_ID else currentNotificationId
 
         // Check if this is an A/B test notification
         val abTestId = message.data?.get("abTestId")?.toString()
@@ -292,6 +316,10 @@ class NotificationHelper(
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(body))
         }
 
+        if (conversation != null) {
+            ConversationNotification.apply(context, builder, conversation, body, avatar, launchIntent)
+        }
+
         // Set group/thread for collapsing
         message.collapseKey?.let { builder.setGroup(it) }
         message.threadId?.let { builder.setGroup(it) }
@@ -309,7 +337,8 @@ class NotificationHelper(
                 putExtra(EXTRA_MESSAGE_ID, message.messageId)
                 putExtra(EXTRA_DEEP_LINK, action.action ?: message.deepLink)
                 // Receiver uses this to auto-dismiss after the action fires.
-                putExtra(EXTRA_NOTIFICATION_ID, currentNotificationId)
+                putExtra(EXTRA_NOTIFICATION_ID, shownId)
+                shownTag?.let { putExtra(EXTRA_NOTIFICATION_TAG, it) }
                 // Full message so the receiver can deliver `data` to the
                 // action-callback (action button alone carries only actionId).
                 putExtra(EXTRA_MESSAGE_JSON, messageJson)
@@ -369,8 +398,8 @@ class NotificationHelper(
         }
 
         try {
-            NotificationManagerCompat.from(context).notify(currentNotificationId, builder.build())
-            Log.d(TAG, "Notification shown: id=$currentNotificationId, title=$title")
+            NotificationManagerCompat.from(context).notify(shownTag, shownId, builder.build())
+            Log.d(TAG, "Notification shown: id=$shownId${shownTag?.let { ", $it" } ?: ""}, title=$title")
         } catch (e: SecurityException) {
             Log.e(TAG, "Notification permission not granted")
         }
