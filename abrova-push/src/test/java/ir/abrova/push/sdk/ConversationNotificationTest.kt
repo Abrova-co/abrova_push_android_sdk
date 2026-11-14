@@ -92,7 +92,12 @@ class ConversationNotificationTest {
 
     @Test
     fun `letter avatar is drawn for any name`() {
-        listOf("@kian", "علی", "", "  ").forEach {
+        listOf(
+            "@kian",
+            "علی",
+            "",
+            "  ",
+        ).forEach {
             val b = ConversationNotification.letterAvatar(it)
             assertEquals(192, b.width)
         }

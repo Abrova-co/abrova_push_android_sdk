@@ -24,7 +24,11 @@ class AbrovaPushChannelsTest {
     private lateinit var manager: NotificationManager
 
     private val offers = AbrovaPushChannel(
-        id = "offers", version = 1, name = mapOf("en" to "Offers", "fa" to "پیشنهادها"),
+        id = "offers", version = 1,
+        name = mapOf(
+            "en" to "Offers",
+            "fa" to "پیشنهادها",
+        ),
         importance = "low", vibrate = false, sound = "none",
     )
     private val orders = AbrovaPushChannel(id = "orders", version = 1, name = mapOf("en" to "Orders"), importance = "high")
