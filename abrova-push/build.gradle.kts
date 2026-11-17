@@ -9,7 +9,7 @@ plugins {
 // Increment MINOR for new features
 // Increment PATCH for bug fixes
 // Increment BUILD for iterations/testing during development
-val sdkVersion = "0.1.22"
+val sdkVersion = "0.1.23"
 
 android {
     namespace = "ir.abrova.push.sdk"
@@ -137,6 +137,8 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20231013")
     testImplementation("org.robolectric:robolectric:4.11.1")
+    // Real MQTT exceptions for the error-reason tests (the protocol library brings Paho at runtime).
+    testImplementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
 
     // Android instrumentation testing
     androidTestImplementation("androidx.test:core:1.5.0")

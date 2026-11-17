@@ -116,4 +116,59 @@ class SdkDiagnosticsTest {
         }
         assertTrue(SdkDiagnostics.isOwnCrash(wrapped))
     }
+
+    // Reasons: why an error happened, from a fixed list, kept and sent like the counts.
+
+    @Test fun `reasons are kept per code and sent in their own header on the same request`() {
+        SdkDiagnostics.attach(context, enabled = true)
+        SdkDiagnostics.count(AbrovaPushErrorCode.CONNECTION_FAILED, "timeout.8883.wifi")
+        SdkDiagnostics.count(AbrovaPushErrorCode.CONNECTION_FAILED, "timeout.8883.wifi")
+        SdkDiagnostics.count(AbrovaPushErrorCode.CONNECTION_SETUP_FAILED, "mqtt32110.8883.cellular")
+        SdkDiagnostics.count(AbrovaPushErrorCode.CONFIGURATION_FAILED, "http503")
+        SdkDiagnostics.count(AbrovaPushErrorCode.REGISTRATION_FAILED) // no reason: counted only
+        assertEquals(mapOf(1000 to 2, 1007 to 1, 1304 to 1, 1400 to 1), SdkDiagnostics.pending())
+        assertEquals(mapOf("1000:timeout.8883.wifi" to 2, "1007:mqtt32110.8883.cellular" to 1, "1304:http503" to 1), SdkDiagnostics.pendingReasons())
+
+        val client = OkHttpClient.Builder().addInterceptor(SdkDiagnostics.interceptor()).build()
+        val call = { client.newCall(Request.Builder().url(server.url("/x")).build()).execute().close() }
+        server.enqueue(MockResponse().setResponseCode(503))
+        call()
+        val first = server.takeRequest()
+        assertEquals("1000=2 1007=1 1304=1 1400=1", first.getHeader(SdkDiagnostics.HEADER))
+        assertEquals("1000:timeout.8883.wifi=2 1007:mqtt32110.8883.cellular=1 1304:http503=1", first.getHeader(SdkDiagnostics.REASONS_HEADER))
+        assertEquals(3, SdkDiagnostics.pendingReasons().size) // not a 2xx: kept
+
+        server.enqueue(MockResponse().setResponseCode(200))
+        call()
+        assertEquals("1000:timeout.8883.wifi=2 1007:mqtt32110.8883.cellular=1 1304:http503=1", server.takeRequest().getHeader(SdkDiagnostics.REASONS_HEADER))
+        assertTrue(SdkDiagnostics.pendingReasons().isEmpty())
+        assertTrue(SdkDiagnostics.pending().isEmpty())
+    }
+
+    @Test fun `only fixed-list reasons are kept - free text never`() {
+        SdkDiagnostics.attach(context, enabled = true)
+        for (bad in listOf("Connection refused", "10.0.0.1", "pn-tcp.abrova.ir", "timeout.8883.lte", "Timeout", "")) {
+            SdkDiagnostics.count(1000, bad)
+        }
+        assertTrue(SdkDiagnostics.pendingReasons().isEmpty())
+        assertEquals(mapOf(1000 to 6), SdkDiagnostics.pending()) // the code is still counted
+    }
+
+    @Test fun `reasons are bounded - 16 entries, 400 characters, the rest waits`() {
+        SdkDiagnostics.attach(context, enabled = true)
+        for (port in 1001..1020) SdkDiagnostics.count(1000, "timeout.$port.cellular")
+        assertEquals(SdkDiagnostics.MAX_CODES, SdkDiagnostics.pendingReasons().size)
+        val value = SdkDiagnostics.reasonsHeaderValue(SdkDiagnostics.pendingReasons())!!
+        assertTrue(value.length <= 400)
+        assertTrue(value.split(' ').size < SdkDiagnostics.MAX_CODES) // 16 long entries do not fit: some wait
+    }
+
+    @Test fun `reasons made before attach are kept, and switched off keeps none`() {
+        SdkDiagnostics.count(1000, "dns")
+        SdkDiagnostics.attach(context, enabled = true)
+        assertEquals(mapOf("1000:dns" to 1), SdkDiagnostics.pendingReasons())
+        SdkDiagnostics.attach(context, enabled = false)
+        SdkDiagnostics.count(1000, "dns")
+        assertTrue(SdkDiagnostics.pendingReasons().isEmpty())
+    }
 }

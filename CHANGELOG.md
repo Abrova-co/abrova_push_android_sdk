@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.23] - 2026-11-18
+
+### Added
+- Error reports say why. With `sendDiagnostics` on (the default), the SDK's own error counts now also carry a short
+  reason from a fixed list (for example `timeout`, `dns`, `tls`, an MQTT or HTTP status code), the port and the
+  network type (Wi-Fi or mobile). Never a message, address, user or device detail. Turn it off with
+  `sendDiagnostics = false`, as before.
+- New error code `1007 CONNECTION_SETUP_FAILED`: a connection that failed while it was being set up, before any
+  network traffic. It was reported as `9999 UNKNOWN_ERROR` before.
+
+### Security
+- Tokens and passwords are never written to the log; the registration answer is logged with them masked.
+
 ## [0.1.22] - 2026-11-15
 
 ### Added

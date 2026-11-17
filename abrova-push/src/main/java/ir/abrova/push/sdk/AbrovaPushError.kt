@@ -13,6 +13,7 @@ enum class AbrovaPushErrorCode(val code: Int, val message: String) {
     AUTHENTICATION_FAILED(1004, "Authentication failed - invalid credentials"),
     SSL_ERROR(1005, "SSL/TLS handshake failed"),
     BROKER_UNAVAILABLE(1006, "PN Protocol gateway is unavailable"),
+    CONNECTION_SETUP_FAILED(1007, "Connection could not be set up"),
 
     // Subscription errors (1100-1199)
     SUBSCRIPTION_FAILED(1100, "Failed to subscribe to topic"),

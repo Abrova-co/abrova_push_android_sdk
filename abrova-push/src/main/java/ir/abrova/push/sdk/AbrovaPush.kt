@@ -343,6 +343,9 @@ object AbrovaPush {
         if (!cfg.hasPushConfig()) {
             Log.d(TAG, "Fetching push config from server...")
             client.fetchPushConfigAsync(object : ApiClient.ApiCallback<ApiClient.PushConfig> {
+                private var reason: String? = null
+                override fun onErrorReason(reason: String) { this.reason = reason }
+
                 override fun onSuccess(pushConfig: ApiClient.PushConfig) {
                     Log.d(TAG, "Push config fetched: host=${pushConfig.host}, port=${pushConfig.port}")
                     cfg.updatePushConfig(host = pushConfig.host, port = pushConfig.port, username = pushConfig.username, password = pushConfig.password)
@@ -353,7 +356,7 @@ object AbrovaPush {
                 override fun onError(error: String) {
                     Log.e(TAG, "Failed to fetch push config: $error")
                     callback?.onError("Failed to fetch push config: $error")
-                    SdkDiagnostics.count(AbrovaPushErrorCode.CONFIGURATION_FAILED)
+                    SdkDiagnostics.count(AbrovaPushErrorCode.CONFIGURATION_FAILED, reason)
                     callback?.onDetailedError(AbrovaPushError(AbrovaPushErrorCode.CONFIGURATION_FAILED, error))
                 }
             })
@@ -409,6 +412,9 @@ object AbrovaPush {
             installId = InstallId.get(ctx),
             extraFields = transportFields.takeIf { it.isNotEmpty() },
             callback = object : ApiClient.ApiCallback<ApiClient.RegisterResponse> {
+            private var reason: String? = null
+            override fun onErrorReason(reason: String) { this.reason = reason }
+
             override fun onSuccess(response: ApiClient.RegisterResponse) {
                 Log.d(TAG, "Device registered: ${response.deviceId}, appId: ${response.appId}")
 
@@ -472,7 +478,7 @@ object AbrovaPush {
                 }
                 Log.e(TAG, "Registration failed: $error")
                 callback?.onError(error)
-                SdkDiagnostics.count(AbrovaPushErrorCode.REGISTRATION_FAILED)
+                SdkDiagnostics.count(AbrovaPushErrorCode.REGISTRATION_FAILED, reason)
                 callback?.onDetailedError(AbrovaPushError(AbrovaPushErrorCode.REGISTRATION_FAILED, error))
             }
         })
@@ -488,6 +494,9 @@ object AbrovaPush {
         Log.d(TAG, "Subscribing to topic: $topic")
 
         client.subscribeTopic(devId, topic, object : ApiClient.ApiCallback<String> {
+            private var reason: String? = null
+            override fun onErrorReason(reason: String) { this.reason = reason }
+
             override fun onSuccess(response: String) {
                 Log.d(TAG, "Subscribed to topic: $topic")
             }
@@ -495,7 +504,7 @@ object AbrovaPush {
             override fun onError(error: String) {
                 Log.e(TAG, "Failed to subscribe to topic: $error")
                 callback?.onError(error)
-                SdkDiagnostics.count(AbrovaPushErrorCode.SUBSCRIPTION_FAILED)
+                SdkDiagnostics.count(AbrovaPushErrorCode.SUBSCRIPTION_FAILED, reason)
                 callback?.onDetailedError(AbrovaPushError(AbrovaPushErrorCode.SUBSCRIPTION_FAILED, error))
             }
         })
@@ -511,6 +520,9 @@ object AbrovaPush {
         Log.d(TAG, "Unsubscribing from topic: $topic")
 
         client.unsubscribeTopic(devId, topic, object : ApiClient.ApiCallback<String> {
+            private var reason: String? = null
+            override fun onErrorReason(reason: String) { this.reason = reason }
+
             override fun onSuccess(response: String) {
                 Log.d(TAG, "Unsubscribed from topic: $topic")
             }
@@ -518,7 +530,7 @@ object AbrovaPush {
             override fun onError(error: String) {
                 Log.e(TAG, "Failed to unsubscribe from topic: $error")
                 callback?.onError(error)
-                SdkDiagnostics.count(AbrovaPushErrorCode.UNSUBSCRIPTION_FAILED)
+                SdkDiagnostics.count(AbrovaPushErrorCode.UNSUBSCRIPTION_FAILED, reason)
                 callback?.onDetailedError(AbrovaPushError(AbrovaPushErrorCode.UNSUBSCRIPTION_FAILED, error))
             }
         })

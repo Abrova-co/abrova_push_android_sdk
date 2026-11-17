@@ -1,5 +1,7 @@
 package ir.abrova.push.sdk
 
+import ir.abrova.push.sdk.internal.LogMask
+import ir.abrova.push.sdk.internal.SdkErrorReason
 import android.os.Handler
 import android.os.Looper
 import com.google.gson.Gson
@@ -84,6 +86,12 @@ class ApiClient(private val config: AbrovaPushConfig) {
     interface ApiCallback<T> {
         fun onSuccess(response: T)
         fun onError(error: String)
+
+        /**
+         * Why the request failed, as one word from a fixed list (see SdkErrorReason; e.g. `timeout`, `dns`,
+         * `http503`), called just before [onError]. Only for the SDK's own error report; ignored by default.
+         */
+        fun onErrorReason(reason: String) {}
     }
 
     /**
@@ -137,6 +145,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e(TAG, "Registration failed: ${e.message}")
                 mainHandler.post {
+                    callback.onErrorReason(SdkErrorReason.of(e))
                     callback.onError(e.message ?: "Network error")
                 }
             }
@@ -150,7 +159,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
 
                 mainHandler.post {
                     if (isSuccessful) {
-                        Log.d(TAG, "Device registered successfully: $responseBody")
+                        Log.d(TAG, "Device registered successfully: ${LogMask.secrets(responseBody)}")
                         try {
                             val jsonResponse = gson.fromJson(responseBody, RegisterResponse::class.java)
                             callback.onSuccess(jsonResponse ?: RegisterResponse(deviceId))
@@ -160,6 +169,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
                         }
                     } else {
                         Log.e(TAG, "Registration failed: $code - $responseBody")
+                        callback.onErrorReason(SdkErrorReason.http(code))
                         callback.onError("Registration failed: $code")
                     }
                 }
@@ -210,6 +220,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e(TAG, "Topic subscription failed: ${e.message}")
                 mainHandler.post {
+                    callback.onErrorReason(SdkErrorReason.of(e))
                     callback.onError(e.message ?: "Network error")
                 }
             }
@@ -226,6 +237,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
                         callback.onSuccess(responseBody)
                     } else {
                         Log.e(TAG, "Topic subscription failed: $code")
+                        callback.onErrorReason(SdkErrorReason.http(code))
                         callback.onError("Topic subscription failed: $code")
                     }
                 }
@@ -249,6 +261,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e(TAG, "Topic unsubscription failed: ${e.message}")
                 mainHandler.post {
+                    callback.onErrorReason(SdkErrorReason.of(e))
                     callback.onError(e.message ?: "Network error")
                 }
             }
@@ -265,6 +278,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
                         callback.onSuccess(responseBody)
                     } else {
                         Log.e(TAG, "Topic unsubscription failed: $code")
+                        callback.onErrorReason(SdkErrorReason.http(code))
                         callback.onError("Topic unsubscription failed: $code")
                     }
                 }
@@ -419,6 +433,7 @@ class ApiClient(private val config: AbrovaPushConfig) {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e(TAG, "Fetch push config failed: ${e.message}")
                 mainHandler.post {
+                    callback.onErrorReason(SdkErrorReason.of(e))
                     callback.onError(e.message ?: "Network error")
                 }
             }
@@ -439,13 +454,16 @@ class ApiClient(private val config: AbrovaPushConfig) {
                                 callback.onSuccess(configResponse.mqtt)
                             } catch (e: Exception) {
                                 Log.e(TAG, "Parse push config failed: ${e.message}")
+                                callback.onErrorReason(SdkErrorReason.of(e))
                                 callback.onError("Failed to parse push config")
                             }
                         } else {
+                            callback.onErrorReason("parse")
                             callback.onError("Empty response from server")
                         }
                     } else {
                         Log.e(TAG, "Fetch push config failed: $code")
+                        callback.onErrorReason(SdkErrorReason.http(code))
                         callback.onError("Failed to fetch push config: $code")
                     }
                 }

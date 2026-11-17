@@ -33,7 +33,7 @@ Then add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("ir.abrova:abrova-push-android:0.1.22")
+    implementation("ir.abrova:abrova-push-android:0.1.23")
 }
 ```
 
@@ -256,7 +256,21 @@ val count = AbrovaPush.getInboxManager().getUnreadCount()
 | `wrapperSdkName` | String? | null | **Official wrappers only** (e.g. `"flutter"`, `"react-native"`). Reported instead of `android` |
 | `wrapperSdkVersion` | String? | null | **Official wrappers only.** Version reported with `wrapperSdkName` |
 | `tokenProvider` | suspend () -> String? | null | Returns a signed user token from your server. See [Signed user tokens](#signed-user-tokens) |
-| `sendDiagnostics` | Boolean | true | Send counts of the SDK's own errors (by error code, no personal data) with its requests |
+| `sendDiagnostics` | Boolean | true | Send counts of the SDK's own errors (by error code, with a short reason from a fixed list; no personal data) with its requests. See [Diagnostics](#diagnostics) |
+
+### Diagnostics
+
+With `sendDiagnostics` on (the default), the SDK counts its own errors and sends the counts with its next ordinary
+request to Abrova Push, in two headers:
+
+- `X-Abrova-SDK-Report`: counts per public error code, e.g. `1000=3 1400=1`.
+- `X-Abrova-SDK-Report-Reasons`: why, e.g. `1000:timeout.8883.wifi=3 1304:http503=1`. The reason comes from a fixed
+  list (`timeout`, `dns`, `refused`, `noroute`, `reset`, `eof`, `socket`, `tls_handshake`, `cert`, `tls`,
+  `mqtt<code>`, `http<status>`, `parse`, `state`, `arg`, `security`, `oom`, `cancelled`, `other`), followed by the
+  port and the network type (`wifi`, `cellular`, `ethernet`, `vpn`, `none`, `other`) when known.
+
+Both are counts only: never a message, stack trace, address, key, user or device detail. A count is cleared only after
+the server accepted it. Set `sendDiagnostics = false` to count, keep and send nothing.
 
 The SDK reports its identity to the server (`sdkName`/`sdkVersion` on register and an `X-Abrova-SDK: android/<version>` header on every request). The native version is available as `AbrovaPush.SDK_VERSION`. Wrapper values must be at most 32 characters of `A-Za-z0-9._+-` and are ignored unless both are set.
 
@@ -295,7 +309,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Abrova-co/abrova_pus
 
 ```kotlin
 dependencies {
-    implementation("ir.abrova:abrova-push-android:0.1.22")
+    implementation("ir.abrova:abrova-push-android:0.1.23")
     implementation("ir.abrova:abrova-push-voip:0.1.1")  // Optional
 }
 ```

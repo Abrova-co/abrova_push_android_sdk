@@ -6,6 +6,7 @@ import ir.abrova.push.sdk.internal.EndpointSelector
 import ir.abrova.push.sdk.internal.MqttEndpoints
 import ir.abrova.push.sdk.internal.PrefsEndpointStore
 import ir.abrova.push.sdk.internal.ReconnectDebouncer
+import ir.abrova.push.sdk.internal.SdkErrorReason
 
 /**
  * Manager that wraps PNSocket for the Abrova Push SDK.
@@ -35,10 +36,25 @@ class PNSocketManager(
         /** Screen on + user present + foreground usually fire together. */
         private const val WAKE_DEBOUNCE_MS = 2_000L
         private const val NETWORK_DEBOUNCE_MS = 1_000L
+
+        /**
+         * The public error code for a protocol error. The protocol reports a connection that failed while being set
+         * up (before any network traffic) as UNKNOWN; while CONNECTING that is [AbrovaPushErrorCode.CONNECTION_SETUP_FAILED]
+         * (it was 9999 before 0.1.23). Every other mapping is unchanged.
+         */
+        internal fun errorCodeFor(code: PNError.Code, state: PNState?): AbrovaPushErrorCode = when (code) {
+            PNError.Code.CONNECTION_FAILED -> AbrovaPushErrorCode.CONNECTION_FAILED
+            PNError.Code.CONNECTION_LOST -> AbrovaPushErrorCode.CONNECTION_LOST
+            PNError.Code.AUTH_FAILED -> AbrovaPushErrorCode.AUTHENTICATION_FAILED
+            PNError.Code.UNKNOWN -> if (state == PNState.CONNECTING) AbrovaPushErrorCode.CONNECTION_SETUP_FAILED else AbrovaPushErrorCode.UNKNOWN_ERROR
+            else -> AbrovaPushErrorCode.UNKNOWN_ERROR
+        }
     }
 
     @Volatile
     private var socket: PNSocket? = null
+    /** The last state the socket reported: an error while CONNECTING happened while the connection was being set up. */
+    @Volatile private var lastState: PNState? = null
 
     private val networkMonitor = NetworkMonitor(context)
     private val endpointSelector = EndpointSelector(
@@ -148,6 +164,7 @@ class PNSocketManager(
         socket?.addConnectionListener(object : PNConnectionListener {
             override fun onStateChanged(state: PNState) {
                 Log.d(TAG, "State changed: $state")
+                lastState = state
                 val connState = when (state) {
                     PNState.DISCONNECTED -> ConnectionState.DISCONNECTED
                     PNState.CONNECTING -> ConnectionState.CONNECTING
@@ -197,16 +214,11 @@ class PNSocketManager(
         socket?.addErrorListener { error ->
             Log.e(TAG, "Error: ${error.message}")
             val abrovaPushError = AbrovaPushError(
-                errorCode = when (error.code) {
-                    PNError.Code.CONNECTION_FAILED -> AbrovaPushErrorCode.CONNECTION_FAILED
-                    PNError.Code.CONNECTION_LOST -> AbrovaPushErrorCode.CONNECTION_LOST
-                    PNError.Code.AUTH_FAILED -> AbrovaPushErrorCode.AUTHENTICATION_FAILED
-                    else -> AbrovaPushErrorCode.UNKNOWN_ERROR
-                },
+                errorCode = errorCodeFor(error.code, lastState),
                 details = error.message,
                 cause = error.cause
             )
-            ir.abrova.push.sdk.internal.SdkDiagnostics.count(abrovaPushError.errorCode)
+            ir.abrova.push.sdk.internal.SdkDiagnostics.count(abrovaPushError.errorCode, reasonFor(error.cause))
             AbrovaPushExecutors.executeMain {
                 errorCallback?.onError(abrovaPushError)
                 callback?.onError(error.message)
@@ -329,6 +341,15 @@ class PNSocketManager(
         val s = socket ?: return
         Log.d(TAG, "Default network changed - reconnecting on the new network")
         s.reconnectImmediately(force = true)
+    }
+
+    /** Why a connection error happened, for the SDK's own error report: reason, port, network (fixed words only). */
+    private fun reasonFor(cause: Throwable?): String = try {
+        // The port only when every endpoint uses the same one: the protocol does not say which one this attempt used.
+        val ports = endpointSelector.endpoints().map { it.port }.distinct()
+        SdkErrorReason.key(SdkErrorReason.of(cause), ports.singleOrNull(), networkMonitor.getNetworkType())
+    } catch (_: Exception) {
+        SdkErrorReason.of(cause)
     }
 
     private fun currentNetworkKey(): String = try {
