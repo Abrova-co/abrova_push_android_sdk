@@ -264,10 +264,10 @@ With `sendDiagnostics` on (the default), the SDK counts its own errors and sends
 request to Abrova Push, in two headers:
 
 - `X-Abrova-SDK-Report`: counts per public error code, e.g. `1000=3 1400=1`.
-- `X-Abrova-SDK-Report-Reasons`: why, e.g. `1000:timeout.8883.wifi=3 1304:http503=1`. The reason comes from a fixed
-  list (`timeout`, `dns`, `refused`, `noroute`, `reset`, `eof`, `socket`, `tls_handshake`, `cert`, `tls`,
-  `mqtt<code>`, `http<status>`, `parse`, `state`, `arg`, `security`, `oom`, `cancelled`, `other`), followed by the
-  port and the network type (`wifi`, `cellular`, `ethernet`, `vpn`, `none`, `other`) when known.
+- `X-Abrova-SDK-Report-Reasons`: why, e.g. `1000:timeout=3 1304:http503=1`. The reason comes from a fixed list
+  (`timeout`, `dns`, `refused`, `noroute`, `reset`, `eof`, `socket`, `tls_handshake`, `cert`, `tls`, a connection or
+  HTTP status code, `parse`, `state`, `arg`, `security`, `oom`, `cancelled`, `other`), followed by the port and the
+  network type (`wifi`, `cellular`, `ethernet`, `vpn`, `none`, `other`) when known.
 
 Both are counts only: never a message, stack trace, address, key, user or device detail. A count is cleared only after
 the server accepted it. Set `sendDiagnostics = false` to count, keep and send nothing.

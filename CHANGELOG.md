@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Error reports say why. With `sendDiagnostics` on (the default), the SDK's own error counts now also carry a short
-  reason from a fixed list (for example `timeout`, `dns`, `tls`, an MQTT or HTTP status code), the port and the
+  reason from a fixed list (for example `timeout`, `dns`, `tls`, a connection or HTTP status code), the port and the
   network type (Wi-Fi or mobile). Never a message, address, user or device detail. Turn it off with
   `sendDiagnostics = false`, as before.
 - New error code `1007 CONNECTION_SETUP_FAILED`: a connection that failed while it was being set up, before any
