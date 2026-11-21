@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.24] - 2026-11-22
+### Added
+- Notifications turned off: `AbrovaPush.areNotificationsEnabled()`, `setNotificationPermissionListener { enabled -> }`
+  (checked at `init()` and each time the app comes to the front, e.g. back from Settings) and
+  `openNotificationSettings()` (this app's notification page). The SDK also tells Abrova, so the Console shows these
+  devices and why their messages were not seen. Turning notifications off in Settings stops the app on Android 13+;
+  the change is reported at the next start.
+- In-app messages update at once: when you publish or change one in the Console, apps that are open fetch the list
+  again within a minute and show a message whose trigger is session start. Unchanged lists cost almost nothing.
+- Banner position: `InAppMessageContent.position` (`top` or `bottom`, as chosen in the Console); translations keep it.
+### Changed
+- The built-in in-app display looks like the Console's preview: image 2:1 in a modal and full screen, 3:1 in a card,
+  a small square in a banner; a banner at the top or the bottom with its buttons; a card at the bottom without dimming;
+  close button on the image corner (left for right-to-left text); button styles as in the Console.
+### Fixed
+- After a message was handed to a Flutter or React Native app, no later in-app message could show in that session.
+- Back on a modal or full-screen message now closes the message instead of the screen behind it, and a message whose
+  screen was closed no longer blocks the next one.
+
 ## [0.1.23] - 2026-11-18
 
 ### Added

@@ -65,6 +65,10 @@ class InAppMessageManager private constructor(
         private const val KEY_SESSION_COUNT = "session_count"
         private const val KEY_CACHED_MESSAGES = "cached_messages"
         private const val KEY_LAST_FETCH = "last_fetch"
+        private const val KEY_ETAG = "etag"
+
+        /** After the change signal, wait a random time up to this, so a whole project's phones don't fetch at once. */
+        internal const val SIGNAL_JITTER_MS = 60_000L
         private const val CACHE_TTL_MS = 5 * 60 * 1000L // 5 minutes
 
         @Volatile
@@ -143,7 +147,18 @@ class InAppMessageManager private constructor(
                 userId?.let { params["userId"] = it }
 
                 AbrovaPushLogger.d(TAG, "Fetching in-app messages with params: $params")
-                val response = apiClient.getInAppMessages(params)
+                // The ETag of the cached list: the server answers 304 while nothing changed.
+                val etag = if (cachedMessages.isEmpty()) null else prefs.getString(KEY_ETAG, null)
+                val result = apiClient.fetchInAppMessages(params, etag)
+                if (result?.notModified == true) {
+                    AbrovaPushExecutors.executeIO {
+                        prefs.edit().putLong(KEY_LAST_FETCH, System.currentTimeMillis()).apply()
+                    }
+                    AbrovaPushLogger.d(TAG, "In-app messages unchanged (${cachedMessages.size})")
+                    AbrovaPushExecutors.executeMain { onComplete?.invoke(cachedMessages) }
+                    return@executeNetwork
+                }
+                val response = result?.body
                 AbrovaPushLogger.d(TAG, "API response: $response")
 
                 if (response != null) {
@@ -152,7 +167,10 @@ class InAppMessageManager private constructor(
                     // Save to SharedPreferences on IO thread
                     AbrovaPushExecutors.executeIO {
                         saveCachedMessages(messages)
-                        prefs.edit().putLong(KEY_LAST_FETCH, System.currentTimeMillis()).apply()
+                        prefs.edit()
+                            .putLong(KEY_LAST_FETCH, System.currentTimeMillis())
+                            .putString(KEY_ETAG, result.etag)
+                            .apply()
                     }
 
                     AbrovaPushLogger.d(TAG, "Fetched ${messages.size} in-app messages")
@@ -202,6 +220,40 @@ class InAppMessageManager private constructor(
         AbrovaPushLogger.d(TAG, "Triggering on_session_start")
         incrementSessionCount()
         triggerMessages(InAppTriggerType.ON_SESSION_START)
+    }
+
+    /**
+     * The server said the project's in-app messages changed (published, edited, paused). After a random wait,
+     * fetch them again and, while the app is open, show one whose trigger is session start, as if a session had
+     * just started (without counting a new session).
+     */
+    fun onServerSignal() {
+        val wait = (Math.random() * SIGNAL_JITTER_MS).toLong()
+        AbrovaPushLogger.d(TAG, "In-app change signal: fetching in ${wait}ms")
+        AbrovaPushExecutors.executeMainDelayed(wait) {
+            fetchMessages { messages ->
+                if (isShowingMessage) {
+                    AbrovaPushLogger.d(TAG, "In-app change signal: a message is already on screen")
+                    return@fetchMessages
+                }
+                // Only while the app is on screen; otherwise the list is just fresh for the next open.
+                val onScreen = try {
+                    androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState
+                        .isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                } catch (_: Exception) {
+                    false
+                }
+                if (!onScreen) {
+                    AbrovaPushLogger.d(TAG, "In-app change signal: app not on screen, messages kept for later")
+                    return@fetchMessages
+                }
+                if (callback == null && (currentActivity == null || currentActivity?.isFinishing == true)) {
+                    AbrovaPushLogger.d(TAG, "In-app change signal: no activity to show on (setCurrentActivity)")
+                    return@fetchMessages
+                }
+                findAndShowMessage(messages, InAppTriggerType.ON_SESSION_START, null)
+            }
+        }
     }
 
     /**
@@ -401,6 +453,9 @@ class InAppMessageManager private constructor(
 
                     // Notify callback - wrapper will show its own UI
                     callback?.onMessageReady(message)
+                    // The wrapper owns the screen from here (it replaces or queues messages itself); without this
+                    // no later message could be handed over in this session.
+                    isShowingMessage = false
                 } else {
                     // No callback - show native Android UI
                     AbrovaPushLogger.d(TAG, "No callback set - showing native Android UI")
@@ -429,6 +484,11 @@ class InAppMessageManager private constructor(
                         },
                         onDismiss = {
                             handleDismiss(message)
+                        },
+                        onGone = {
+                            // Closed with its screen, not by the user: no dismiss is recorded.
+                            isShowingMessage = false
+                            currentMessageView = null
                         }
                     )
 

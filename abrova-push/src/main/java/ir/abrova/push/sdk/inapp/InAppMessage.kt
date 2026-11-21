@@ -123,7 +123,9 @@ data class InAppMessageContent(
     val imageUrl: String? = null,
     val backgroundColor: String? = null,
     val textColor: String? = null,
-    val buttons: List<InAppButton> = emptyList()
+    val buttons: List<InAppButton> = emptyList(),
+    /** Banner only: "top" (default) or "bottom", as chosen in the Console. */
+    val position: String? = null
 ) {
     companion object {
         fun fromJson(json: JSONObject): InAppMessageContent {
@@ -140,7 +142,8 @@ data class InAppMessageContent(
                 imageUrl = if (json.has("imageUrl") && !json.isNull("imageUrl")) json.getString("imageUrl") else null,
                 backgroundColor = if (json.has("backgroundColor") && !json.isNull("backgroundColor")) json.getString("backgroundColor") else null,
                 textColor = if (json.has("textColor") && !json.isNull("textColor")) json.getString("textColor") else null,
-                buttons = buttons
+                buttons = buttons,
+                position = json.optString("position", "").takeIf { it == "top" || it == "bottom" }
             )
         }
     }
@@ -152,6 +155,7 @@ data class InAppMessageContent(
             imageUrl?.let { put("imageUrl", it) }
             backgroundColor?.let { put("backgroundColor", it) }
             textColor?.let { put("textColor", it) }
+            position?.let { put("position", it) }
             if (buttons.isNotEmpty()) {
                 put("buttons", JSONArray().apply {
                     buttons.forEach { put(it.toJson()) }
@@ -167,7 +171,8 @@ data class InAppMessageContent(
             "imageUrl" to imageUrl,
             "backgroundColor" to backgroundColor,
             "textColor" to textColor,
-            "buttons" to buttons.map { it.toMap() }
+            "buttons" to buttons.map { it.toMap() },
+            "position" to position
         )
     }
 }
@@ -273,14 +278,11 @@ data class InAppMessage(
     fun getLocalizedContent(locale: String): InAppMessageContent {
         val deviceLocale = locale.lowercase().split("-", "_").firstOrNull() ?: "en"
 
-        // Find exact match first
-        localizations.find { it.locale.lowercase() == locale.lowercase() }?.let {
-            return it.content
-        }
-
-        // Find language match
-        localizations.find { it.locale.lowercase().startsWith(deviceLocale) }?.let {
-            return it.content
+        // Find exact match first, then a language match. The banner position is set once (default content).
+        val match = localizations.find { it.locale.lowercase() == locale.lowercase() }
+            ?: localizations.find { it.locale.lowercase().startsWith(deviceLocale) }
+        match?.let {
+            return if (it.content.position == null) it.content.copy(position = content.position) else it.content
         }
 
         // Fall back to default content

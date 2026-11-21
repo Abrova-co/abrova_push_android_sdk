@@ -22,6 +22,13 @@ import java.io.IOException
 class ApiClient(private val config: AbrovaPushConfig) {
     companion object {
         private const val TAG = "Api"
+
+        /** Register field: whether this phone shows the app's notifications (see AbrovaPush.areNotificationsEnabled). */
+        internal const val NOTIFICATIONS_ENABLED_FIELD = "notificationsEnabled"
+
+        /** A validation answer that names [field] as unknown ("property notificationsEnabled should not exist"). */
+        internal fun refusesField(body: String, field: String): Boolean =
+            body.contains(field) && body.contains("should not exist")
     }
 
     private val sdkIdentity = SdkIdentity.from(config)
@@ -167,6 +174,18 @@ class ApiClient(private val config: AbrovaPushConfig) {
                             Log.e(TAG, "Failed to parse registration response: ${e.message}")
                             callback.onSuccess(RegisterResponse(deviceId))
                         }
+                    } else if (code == 400 && extraFields?.containsKey(NOTIFICATIONS_ENABLED_FIELD) == true &&
+                        refusesField(responseBody, NOTIFICATIONS_ENABLED_FIELD)
+                    ) {
+                        // A server from before this field: register again without it, so the app keeps working.
+                        Log.w(TAG, "Server does not take $NOTIFICATIONS_ENABLED_FIELD yet; registering without it")
+                        onNotificationsFieldRefused?.invoke()
+                        registerDevice(
+                            deviceId, userId, metadata, appIdentifier, appVersion, appBuild, osVersion, deviceModel,
+                            language, country, timezone, installId,
+                            extraFields = extraFields.orEmpty().filterKeys { it != NOTIFICATIONS_ENABLED_FIELD }.takeIf { it.isNotEmpty() },
+                            callback = callback
+                        )
                     } else {
                         Log.e(TAG, "Registration failed: $code - $responseBody")
                         callback.onErrorReason(SdkErrorReason.http(code))
@@ -176,6 +195,9 @@ class ApiClient(private val config: AbrovaPushConfig) {
             }
         })
     }
+
+    /** Called when the server refused [NOTIFICATIONS_ENABLED_FIELD] (an older server); the SDK stops sending it for a while. */
+    @Volatile internal var onNotificationsFieldRefused: (() -> Unit)? = null
 
     /**
      * Register request JSON plus fields contributed by add-on transports
@@ -477,28 +499,47 @@ class ApiClient(private val config: AbrovaPushConfig) {
      * Fetch in-app messages for a device (synchronous - call from background thread).
      * Uses POST /in-app/fetch endpoint with body params.
      */
-    fun getInAppMessages(params: Map<String, Any?>): String? {
+    fun getInAppMessages(params: Map<String, Any?>): String? = fetchInAppMessages(params, null)?.body
+
+    /**
+     * The answer of /in-app/fetch. [notModified]: the server answered 304 to [etag] (nothing changed since),
+     * [body] is null then.
+     */
+    data class InAppFetchResult(val body: String?, val etag: String?, val notModified: Boolean)
+
+    /**
+     * Fetches in-app messages (synchronous - call from a background thread). With [etag] from the last answer
+     * the server says 304 while nothing changed, which costs almost nothing. Null on failure.
+     */
+    fun fetchInAppMessages(params: Map<String, Any?>, etag: String?): InAppFetchResult? {
         val body = gson.toJson(params).toRequestBody(jsonMediaType)
 
-        val httpRequest = Request.Builder()
+        val builder = Request.Builder()
             .url("${AbrovaPushConfig.SERVER_URL}/in-app/fetch")
             .addHeader("x-api-key", config.apiKey)
             .addHeader("Content-Type", "application/json")
             .post(body)
-            .build()
+        if (!etag.isNullOrEmpty()) builder.addHeader("If-None-Match", etag)
+        val httpRequest = builder.build()
 
         Log.d(TAG, "Fetching in-app messages for device: ${params["deviceId"]}")
 
         return try {
             val response = client.newCall(httpRequest).execute()
             response.use {
-                if (it.isSuccessful) {
-                    val responseBody = it.body?.string()
-                    Log.d(TAG, "Fetched in-app messages successfully")
-                    responseBody
-                } else {
-                    Log.e(TAG, "Fetch in-app messages failed: ${it.code}")
-                    null
+                when {
+                    it.code == 304 -> {
+                        Log.d(TAG, "In-app messages unchanged")
+                        InAppFetchResult(null, etag, notModified = true)
+                    }
+                    it.isSuccessful -> {
+                        Log.d(TAG, "Fetched in-app messages successfully")
+                        InAppFetchResult(it.body?.string(), it.header("ETag"), notModified = false)
+                    }
+                    else -> {
+                        Log.e(TAG, "Fetch in-app messages failed: ${it.code}")
+                        null
+                    }
                 }
             }
         } catch (e: IOException) {

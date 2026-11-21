@@ -50,7 +50,8 @@ dependencies {
     // Abrova Push SDK (local module)
     implementation(project(":abrova-push"))
     // Abrova Push VoIP SDK (Maven Central)
-    implementation("ir.abrova:abrova-push-voip:0.1.0")
+    // 0.1.0 is not on Center (0.1.1 is). The example builds against this repo's SDK, not the released one.
+    implementation("ir.abrova:abrova-push-voip:0.1.1") { exclude(group = "ir.abrova", module = "abrova-push-android") }
     // AndroidX
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")

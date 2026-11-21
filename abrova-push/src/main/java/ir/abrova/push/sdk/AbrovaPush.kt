@@ -74,6 +74,10 @@ object AbrovaPush {
     private const val KEY_REGISTER_METADATA = "register_metadata"
     private const val KEY_REGISTERED_USER_ID = "registered_user_id"
     private const val KEY_TRANSPORT_FIELDS = "transport_register_fields"
+    private const val KEY_NOTIFICATIONS_FIELD_REFUSED_AT = "notifications_field_refused_at"
+
+    /** After an older server refused notificationsEnabled, try sending it again after this long. */
+    private const val NOTIFICATIONS_FIELD_RETRY_MS = 24L * 60 * 60 * 1000
 
     /** Grace period so an explicit register() right after init() wins over auto-refresh. */
     private const val AUTO_REFRESH_DELAY_MS = 5_000L
@@ -108,7 +112,12 @@ object AbrovaPush {
         this.context = context.applicationContext
         this.config = config
         SdkDiagnostics.attach(context, config.sendDiagnostics)
-        this.apiClient = ApiClient(config)
+        this.apiClient = ApiClient(config).also { client ->
+            client.onNotificationsFieldRefused = {
+                context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putLong(KEY_NOTIFICATIONS_FIELD_REFUSED_AT, System.currentTimeMillis()).apply()
+            }
+        }
         this.deviceId = getOrCreateDeviceId(context)
 
         // Signed user token: keep the last one next to the other credentials. A
@@ -154,6 +163,9 @@ object AbrovaPush {
         pendingActivity?.let { handleNotificationIntent(it.intent) }
 
         registerTapWatcher(context.applicationContext)
+
+        // First notifications on/off check of this process (later ones run when an activity resumes).
+        checkNotificationPermission(context.applicationContext)
     }
 
     /**
@@ -173,6 +185,8 @@ object AbrovaPush {
             }
             override fun onActivityResumed(activity: Activity) {
                 handleNotificationIntent(activity.intent)
+                // Back from Settings (or the permission prompt): notifications may have been turned on or off.
+                checkNotificationPermission(activity.applicationContext)
             }
             override fun onActivityStarted(activity: Activity) {}
             override fun onActivityPaused(activity: Activity) {}
@@ -394,8 +408,7 @@ object AbrovaPush {
 
         // Fields from add-on transports (e.g. fcmToken). Empty without add-ons,
         // in which case the request is unchanged.
-        @OptIn(AbrovaPushInternalApi::class)
-        val transportFields = AbrovaPushTransports.collectRegisterFields(ctx)
+        val transportFields = registerFields(ctx)
 
         client.registerDevice(
             devId,
@@ -1066,7 +1079,7 @@ object AbrovaPush {
             return
         }
 
-        val current = transportFieldsJson(AbrovaPushTransports.collectRegisterFields(ctx))
+        val current = transportFieldsJson(registerFields(ctx))
         val lastSent = prefs.getString(KEY_TRANSPORT_FIELDS, null) ?: transportFieldsJson(emptyMap())
         if (current == lastSent) {
             Log.d(TAG, "Transport refresh not needed")
@@ -1373,6 +1386,99 @@ object AbrovaPush {
         }
     }
 
+    // ==================== Notifications turned off ====================
+
+    @Volatile private var lastNotificationsEnabled: Boolean? = null
+    @Volatile private var notificationPermissionListener: ((Boolean) -> Unit)? = null
+
+    /**
+     * Whether this phone shows the app's notifications. False when the user blocked them (Android 13+ "Don't
+     * allow", or Settings › Apps › Notifications on any version), or before they answered the Android 13+
+     * prompt. Pushes still arrive then, but the phone does not show them. Abrova also tells the server, so the
+     * Console shows these devices and why their messages were not seen.
+     */
+    @JvmStatic
+    fun areNotificationsEnabled(): Boolean {
+        val ctx = context ?: return false
+        return notificationsEnabled(ctx)
+    }
+
+    private fun notificationsEnabled(ctx: Context): Boolean = try {
+        androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+    } catch (_: Exception) {
+        true
+    }
+
+    /**
+     * Called on the main thread when notifications are turned on or off (checked at init and each time an
+     * activity of the app comes to the front, e.g. back from Settings). Show your own "Turn on notifications"
+     * hint here and call [openNotificationSettings] from it. Null removes the listener.
+     */
+    @JvmStatic
+    fun setNotificationPermissionListener(listener: ((enabled: Boolean) -> Unit)?) {
+        notificationPermissionListener = listener
+    }
+
+    /**
+     * Opens this app's notification settings, where the user can turn notifications back on (an app can't do
+     * it itself). Falls back to the app's details page. Returns false if no settings page could be opened.
+     */
+    @JvmStatic
+    fun openNotificationSettings(): Boolean {
+        val ctx = context ?: return false
+        val intents = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                add(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+            }
+            add(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(android.net.Uri.fromParts("package", ctx.packageName, null)))
+        }
+        for (intent in intents) {
+            try {
+                ctx.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            } catch (_: Exception) {
+            }
+        }
+        return false
+    }
+
+    /** Tells the listener and the server when notifications were turned on or off since the last check. */
+    private fun checkNotificationPermission(ctx: Context) {
+        val now = notificationsEnabled(ctx)
+        val before = lastNotificationsEnabled
+        if (before == now) return
+        lastNotificationsEnabled = now
+        notificationPermissionListener?.let { listener ->
+            AbrovaPushExecutors.executeMain { listener(now) }
+        }
+        if (before != null) {
+            Log.d(TAG, "Notifications ${if (now) "turned on" else "turned off"}")
+            refreshTransportRegistration(ctx)
+        } else if (config != null) {
+            // First check of this process. Turning notifications off in Settings kills the app, so the change
+            // usually shows up here: compare with what the server was last told (no request when it's the same),
+            // after a short wait so a register() the app makes at start goes first.
+            scheduleTransportRefresh(ctx, AUTO_REFRESH_DELAY_MS)
+        }
+    }
+
+    /**
+     * Extra register fields: the add-on transports' (e.g. fcmToken) and whether notifications are shown. A
+     * change in any of them re-registers silently (see runTransportRefresh).
+     */
+    @OptIn(AbrovaPushInternalApi::class)
+    private fun registerFields(ctx: Context): Map<String, Any?> {
+        val fields = LinkedHashMap(AbrovaPushTransports.collectRegisterFields(ctx))
+        val refusedAt = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_NOTIFICATIONS_FIELD_REFUSED_AT, 0L)
+        if (refusedAt == 0L || System.currentTimeMillis() - refusedAt !in 0 until NOTIFICATIONS_FIELD_RETRY_MS) {
+            fields[ApiClient.NOTIFICATIONS_ENABLED_FIELD] = notificationsEnabled(ctx)
+        }
+        return fields
+    }
+
     private fun requestNotificationPermissionIfNeeded(activity: Activity) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationPermissionRequested) {
             if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -1400,6 +1506,7 @@ object AbrovaPush {
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
             val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
             Log.d(TAG, "Notification permission ${if (granted) "granted" else "denied"}")
+            context?.let { checkNotificationPermission(it) }
             return true
         }
         return false

@@ -24,6 +24,9 @@ class PNSocketManager(
         private const val TAG = "PNSocket"
         private const val PREFS_NAME = "abrova_push_prefs"
 
+        /** Reserved topic the server uses to say the project's in-app messages changed. */
+        internal const val IN_APP_SIGNAL_TOPIC = "__in_app"
+
         /** Keepalive (seconds). Short enough to survive aggressive NAT/carrier timeouts. */
         internal const val HEARTBEAT_INTERVAL_S = 30
         internal const val CONNECTION_TIMEOUT_S = 30
@@ -254,6 +257,13 @@ class PNSocketManager(
         socket?.stream(broadcastChannel, PNDeliveryMode.RELIABLE) { message ->
             Log.d(TAG, "Message received on $broadcastChannel")
             handleMessage(message)
+        }
+
+        // In-app change signal: the project's in-app messages changed, fetch them again (no polling). It carries
+        // no push, so it never reaches handleMessage().
+        socket?.stream("abrova_push/$appId/topic/$IN_APP_SIGNAL_TOPIC", PNDeliveryMode.RELIABLE) { _ ->
+            Log.d(TAG, "In-app messages changed")
+            ir.abrova.push.sdk.inapp.InAppMessageManager.getInstance()?.onServerSignal()
         }
 
         // Legacy stream — DEPRECATED, see comment above.
