@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.25] - 2026-11-23
+### Added
+- In-app messages whose trigger is "App open" or "Session start" now show by themselves, as in the computer SDK:
+  "App open" each time the app comes to the front, "Session start" at its first start and when it comes back after
+  30 minutes or more. Before, they showed only if the app called `triggerInAppOnAppOpen()` /
+  `triggerInAppOnSessionStart()` itself. Apps that still call them are fine: a second trigger within a few seconds is
+  ignored, so nothing shows twice. `AbrovaPushConfig(autoInAppTriggers = false)` keeps the old behaviour.
+- `AbrovaPushConfig(askNotificationPermission = false)`: the SDK never asks for permission to show notifications;
+  ask at the moment that suits your app with `AbrovaPush.requestNotificationPermission(activity)`. Default `true`
+  (unchanged).
+### Fixed
+- The permission prompt could appear before `init()` (a cross-platform plugin attaches to the screen first); it now
+  waits for `init()` and follows `askNotificationPermission`.
+
 ## [0.1.24] - 2026-11-22
 ### Added
 - Notifications turned off: `AbrovaPush.areNotificationsEnabled()`, `setNotificationPermissionListener { enabled -> }`

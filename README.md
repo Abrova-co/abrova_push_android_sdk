@@ -33,7 +33,7 @@ Then add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("ir.abrova:abrova-push-android:0.1.24")
+    implementation("ir.abrova:abrova-push-android:0.1.25")
 }
 ```
 
@@ -309,7 +309,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Abrova-co/abrova_pus
 
 ```kotlin
 dependencies {
-    implementation("ir.abrova:abrova-push-android:0.1.24")
+    implementation("ir.abrova:abrova-push-android:0.1.25")
     implementation("ir.abrova:abrova-push-voip:0.1.1")  // Optional
 }
 ```

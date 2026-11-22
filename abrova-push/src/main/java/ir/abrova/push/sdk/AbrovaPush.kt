@@ -84,6 +84,9 @@ object AbrovaPush {
 
     private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 10001
 
+    /** Back after this long away: a new session (the desktop SDK's sessionTimeout default). */
+    private const val SESSION_TIMEOUT_MS = 30 * 60 * 1000L
+
     private var context: Context? = null
     private var config: AbrovaPushConfig? = null
     private var apiClient: ApiClient? = null
@@ -164,8 +167,62 @@ object AbrovaPush {
 
         registerTapWatcher(context.applicationContext)
 
+        // An activity shown before init(): ask now (if the app lets the SDK ask).
+        pendingActivity?.let { requestNotificationPermissionIfNeeded(it) }
+
+        // In-app "App open" / "Session start" by themselves when the app comes to the front.
+        if (config.autoInAppTriggers) watchForeground()
+
         // First notifications on/off check of this process (later ones run when an activity resumes).
         checkNotificationPermission(context.applicationContext)
+    }
+
+    @Volatile private var foregroundWatched = false
+    @Volatile private var backgroundSince = 0L
+    @Volatile private var sessionStartedInProcess = false
+    @Volatile private var foregroundTriggerPending = false
+
+    /** App to the front: "App open", and "Session start" at the first one and after [SESSION_TIMEOUT_MS] away. */
+    private fun watchForeground() {
+        if (foregroundWatched) return
+        foregroundWatched = true
+        AbrovaPushExecutors.executeMain {
+            ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> onAppForeground()
+                    Lifecycle.Event.ON_STOP -> backgroundSince = System.currentTimeMillis()
+                    else -> {}
+                }
+            })
+        }
+    }
+
+    private fun onAppForeground() {
+        // A brand-new install has no subscription yet: the server doesn't know it, so wait for its register().
+        if (subscriptionId == null) {
+            foregroundTriggerPending = true
+            return
+        }
+        foregroundTriggerPending = false
+        val away = backgroundSince > 0 && System.currentTimeMillis() - backgroundSince >= SESSION_TIMEOUT_MS
+        try {
+            val manager = getInAppMessageManager()
+            if (!sessionStartedInProcess || away) {
+                sessionStartedInProcess = true
+                manager.triggerOnSessionStart()
+            }
+            manager.triggerOnAppOpen()
+        } catch (e: Exception) {
+            Log.w(TAG, "In-app triggers skipped: ${e.message}")
+        }
+    }
+
+    /** The first register() of a new install succeeded while the app was in front: fire what waited for it. */
+    private fun runPendingForegroundTrigger() {
+        if (!foregroundTriggerPending) return
+        AbrovaPushExecutors.executeMain {
+            if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) onAppForeground()
+        }
     }
 
     /**
@@ -447,6 +504,7 @@ object AbrovaPush {
                         .putString(KEY_SUBSCRIPTION_ID, response.subscriptionId)
                         .apply()
                     Log.d(TAG, "Stored subscriptionId: ${response.subscriptionId}")
+                    runPendingForegroundTrigger()
                 }
 
                 // Update PN Protocol config from registration response (includes JWT token and TLS setting)
@@ -1480,6 +1538,10 @@ object AbrovaPush {
     }
 
     private fun requestNotificationPermissionIfNeeded(activity: Activity) {
+        // Not before init() (a cross-platform plugin attaches to the activity first: the app's setting isn't known
+        // yet; init() asks then), and never when the app asks itself (askNotificationPermission = false).
+        val cfg = config ?: return
+        if (!cfg.askNotificationPermission) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationPermissionRequested) {
             if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED

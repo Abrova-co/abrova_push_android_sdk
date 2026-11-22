@@ -78,7 +78,22 @@ data class AbrovaPushConfig(
      * ordinary API request in the `X-Abrova-SDK-Report` header. Counts only — never a message, stack trace,
      * user or device detail. False: nothing is counted, kept or sent.
      */
-    val sendDiagnostics: Boolean = true
+    val sendDiagnostics: Boolean = true,
+
+    /**
+     * Ask for permission to show notifications (Android 13+) by itself, the first time one of the app's screens is
+     * shown after [AbrovaPush.init] (default true). False: the SDK never asks; ask at the moment that suits your app
+     * with [AbrovaPush.requestNotificationPermission].
+     */
+    val askNotificationPermission: Boolean = true,
+
+    /**
+     * Show in-app messages whose trigger is "App open" or "Session start" by themselves (default true): "App open"
+     * each time the app comes to the front, "Session start" when it comes back after 30 minutes or more (and at its
+     * first start). Calling [AbrovaPush.triggerInAppOnAppOpen] or [AbrovaPush.triggerInAppOnSessionStart] as well
+     * does no harm: a second trigger within a few seconds is ignored. False: only your own calls trigger them.
+     */
+    val autoInAppTriggers: Boolean = true
 ) {
     // Internal notification channel config - not user-configurable
     internal val notificationChannelId: String = "abrova_push_channel"

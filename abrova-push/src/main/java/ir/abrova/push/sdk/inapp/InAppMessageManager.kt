@@ -69,6 +69,9 @@ class InAppMessageManager private constructor(
 
         /** After the change signal, wait a random time up to this, so a whole project's phones don't fetch at once. */
         internal const val SIGNAL_JITTER_MS = 60_000L
+
+        /** Two app-open (or session-start) triggers this close together are one moment. */
+        internal const val REPEAT_TRIGGER_MS = 5_000L
         private const val CACHE_TTL_MS = 5 * 60 * 1000L // 5 minutes
 
         @Volatile
@@ -201,9 +204,20 @@ class InAppMessageManager private constructor(
      * Trigger messages for app open event
      */
     fun triggerOnAppOpen() {
+        val now = System.currentTimeMillis()
+        if (now - lastAppOpenAt < REPEAT_TRIGGER_MS) {
+            AbrovaPushLogger.d(TAG, "on_app_open already triggered just now: skipped")
+            return
+        }
+        lastAppOpenAt = now
         AbrovaPushLogger.d(TAG, "Triggering on_app_open")
         triggerMessages(InAppTriggerType.ON_APP_OPEN)
     }
+
+    // The SDK triggers app open / session start by itself (autoInAppTriggers) and an app may call them too:
+    // a second one within a few seconds is the same moment, so it is skipped (no double show, no double session).
+    private var lastAppOpenAt = 0L
+    private var lastSessionStartAt = 0L
 
     /**
      * Trigger messages for a custom event
@@ -217,6 +231,12 @@ class InAppMessageManager private constructor(
      * Trigger messages for session start
      */
     fun triggerOnSessionStart() {
+        val now = System.currentTimeMillis()
+        if (now - lastSessionStartAt < REPEAT_TRIGGER_MS) {
+            AbrovaPushLogger.d(TAG, "on_session_start already triggered just now: skipped")
+            return
+        }
+        lastSessionStartAt = now
         AbrovaPushLogger.d(TAG, "Triggering on_session_start")
         incrementSessionCount()
         triggerMessages(InAppTriggerType.ON_SESSION_START)
